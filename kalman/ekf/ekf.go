@@ -2,6 +2,7 @@ package ekf
 
 import (
 	"fmt"
+	"math"
 
 	filter "github.com/milosgajdos/go-estimate"
 	"github.com/milosgajdos/go-estimate/estimate"
@@ -218,6 +219,8 @@ func (k *EKF) Update(x, u, z mat.Vector) (filter.Estimate, error) {
 	inn := &mat.VecDense{}
 	inn.SubVec(z, y)
 
+	inn.SetVec(ny-1, k.calcDeltaYaw(z.AtVec(ny-1), y.AtVec(ny-1)))
+
 	// update state x
 	corr := &mat.Dense{}
 	corr.Mul(gain, inn)
@@ -262,6 +265,9 @@ func (k *EKF) Update(x, u, z mat.Vector) (filter.Estimate, error) {
 			k.p.SetSym(i, j, pCorr.At(i, j))
 		}
 	}
+
+	yawNorm := k.normalizeAngle(x.AtVec(nx - 1))
+	x.(*mat.VecDense).SetVec(nx-1, yawNorm)
 
 	return estimate.NewBaseWithCov(x, k.p)
 }
@@ -328,4 +334,29 @@ func (k *EKF) Gain() mat.Matrix {
 	gain.CloneFrom(k.k)
 
 	return gain
+}
+
+// calcDeltaYaw calculates the difference in yaw angle based on its limitations
+func (k *EKF) calcDeltaYaw(heading, lastHeading float64) float64 {
+	delta := heading - lastHeading
+	delta = math.Mod(delta, 2*math.Pi)
+
+	if delta > math.Pi {
+		delta -= 2 * math.Pi
+	} else if delta < -math.Pi {
+		delta += 2 * math.Pi
+	}
+
+	return delta
+}
+
+// normalizeAngle brings an angle to the range [-π, π]
+func (k *EKF) normalizeAngle(angle float64) float64 {
+	angle = math.Mod(angle, 2*math.Pi)
+	if angle > math.Pi {
+		angle -= 2 * math.Pi
+	} else if angle < -math.Pi {
+		angle += 2 * math.Pi
+	}
+	return angle
 }
