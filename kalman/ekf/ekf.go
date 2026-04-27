@@ -336,6 +336,40 @@ func (k *EKF) Gain() mat.Matrix {
 	return gain
 }
 
+// SetStateNoise sets of the state noise
+func (k *EKF) SetStateNoise(q filter.Noise) error {
+	nx, _, _, _ := k.m.SystemDims()
+
+	if q == nil {
+		q, _ = noise.NewNone()
+	}
+
+	if q.Cov().SymmetricDim() != nx {
+		return fmt.Errorf("invalid Q matrix dimension: %d, expected: %d",
+			q.Cov().SymmetricDim(), nx)
+	}
+
+	k.q = q
+	return nil
+}
+
+// SetOutputNoise sets of the output noise
+func (k *EKF) SetOutputNoise(r filter.Noise) error {
+	_, _, ny, _ := k.m.SystemDims()
+
+	if r == nil {
+		r, _ = noise.NewNone()
+	}
+
+	if r.Cov().SymmetricDim() != ny {
+		return fmt.Errorf("invalid R matrix dimension: %d, expected: %d",
+			r.Cov().SymmetricDim(), ny)
+	}
+
+	k.r = r
+	return nil
+}
+
 // calcDeltaYaw calculates the difference in yaw angle based on its limitations
 func (k *EKF) calcDeltaYaw(heading, lastHeading float64) float64 {
 	delta := heading - lastHeading
