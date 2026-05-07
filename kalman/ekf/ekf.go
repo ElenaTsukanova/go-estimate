@@ -266,8 +266,8 @@ func (k *EKF) Update(x, u, z mat.Vector) (filter.Estimate, error) {
 		}
 	}
 
-	yawNorm := k.normalizeAngle(x.AtVec(nx - 1))
-	x.(*mat.VecDense).SetVec(nx-1, yawNorm)
+	yawNorm := k.normalizeAngle(x.AtVec(nx - 2))
+	x.(*mat.VecDense).SetVec(nx-2, yawNorm)
 
 	return estimate.NewBaseWithCov(x, k.p)
 }
