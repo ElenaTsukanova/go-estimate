@@ -289,6 +289,120 @@ func (k *EKF) Run(x, u, z mat.Vector) (filter.Estimate, error) {
 	return est, nil
 }
 
+// UpdateZUPT corrects state x using the measurement z, given control intput u and returns corrected estimate.
+// It returns error if either invalid state was supplied or if it fails to calculate system output estimate.
+func (k *EKF) UpdateZUPT(x, u, z mat.Vector, H_zupt, R_zupt mat.Matrix) (filter.Estimate, error) {
+	nx, _, _, _ := k.m.SystemDims()
+	ny := 2
+
+	if z.Len() != ny {
+		return nil, fmt.Errorf("invalid ZUPT measurement dimension: expected %d, got %d", ny, z.Len())
+	}
+
+	// Obtain the expected measurement (speed from state)
+	y := mat.NewVecDense(ny, nil)
+
+	// Extracting velocities from the state
+	vx := x.AtVec(2)
+	vy := x.AtVec(3)
+	y.SetVec(0, vx)
+	y.SetVec(1, vy)
+
+	// Calculate the covariance of innovation
+	pxy := mat.NewDense(nx, ny, nil)
+	pyy := mat.NewDense(ny, ny, nil)
+
+	// P*H'
+	pxy.Mul(k.pNext, H_zupt.T())
+
+	// Note: pxy = P * H' so we reuse the result here
+	// H*P*H'
+	pyy.Mul(H_zupt, pxy)
+
+	// Adding ZUPT measurement noise
+	pyy.Add(pyy, R_zupt)
+
+	// Calculate Kalman gain
+	pyyInv := &mat.Dense{}
+	if err := pyyInv.Inverse(pyy); err != nil {
+		return nil, fmt.Errorf("failed to calculat Pyy inverse: %v", err)
+	}
+	gain := &mat.Dense{}
+	gain.Mul(pxy, pyyInv)
+
+	// Innovation vector
+	inn := &mat.VecDense{}
+	inn.SubVec(z, y)
+
+	// Update state x
+	corr := &mat.Dense{}
+	corr.Mul(gain, inn)
+	x.(*mat.VecDense).AddVec(x, corr.ColView(0))
+
+	correction := mat.NewVecDense(nx, nil)
+	correction.MulVec(gain, inn)
+	x.(*mat.VecDense).AddVec(x, correction)
+
+	// Joseph form update
+	eye := mat.NewDiagDense(x.Len(), nil)
+	for i := 0; i < x.Len(); i++ {
+		eye.SetDiag(i, 1.0)
+	}
+	a := &mat.Dense{}
+	// K*H
+	a.Mul(gain, H_zupt)
+	// eye - K*H
+	a.Sub(eye, a)
+
+	// K * R_zupt * K^T
+	kr := &mat.Dense{}
+	pkrk := &mat.Dense{}
+	kr.Mul(gain, R_zupt)
+	pkrk.Mul(kr, gain.T())
+
+	ap := &mat.Dense{}
+	ap.Mul(a, k.pNext)
+	apa := &mat.Dense{}
+	apa.Mul(ap, a.T())
+
+	pCorr := &mat.Dense{}
+	if !pkrk.IsEmpty() {
+		pCorr.Add(apa, pkrk)
+	}
+
+	// update EKF innovation vector
+	k.inn.CopyVec(inn)
+	k.k.Copy(gain)
+	// update EKF covariance matrix
+	for i := 0; i < nx; i++ {
+		for j := i; j < nx; j++ {
+			k.p.SetSym(i, j, pCorr.At(i, j))
+		}
+	}
+
+	yawNorm := k.normalizeAngle(x.AtVec(nx - 2))
+	x.(*mat.VecDense).SetVec(nx-2, yawNorm)
+
+	return estimate.NewBaseWithCov(x, k.p)
+}
+
+// RunZUPT runs one step of EKF for given state x, input u and measurement z.
+// It corrects system state x using measurement z and returns new system estimate.
+// It returns error if it either fails to propagate or correct state x.
+func (k *EKF) RunZUPT(x, u, z mat.Vector, H_zupt, R_zupt mat.Matrix) (filter.Estimate, error) {
+	pred, err := k.Predict(x, u)
+	if err != nil {
+		return nil, err
+	}
+
+	est, err := k.UpdateZUPT(pred.Val(), u, z, H_zupt, R_zupt)
+	if err != nil {
+		return nil, err
+	}
+
+	return est, nil
+}
+
 // Model returns EKF model
 func (k *EKF) Model() filter.Model {
 	return k.m
