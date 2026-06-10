@@ -219,7 +219,7 @@ func (k *EKF) Update(x, u, z mat.Vector) (filter.Estimate, error) {
 	inn := &mat.VecDense{}
 	inn.SubVec(z, y)
 
-	inn.SetVec(ny-1, k.calcDeltaYaw(z.AtVec(ny-1), y.AtVec(ny-1)))
+	inn.SetVec(ny-1, calcDeltaYaw(z.AtVec(ny-1), y.AtVec(ny-1)))
 
 	// update state x
 	corr := &mat.Dense{}
@@ -266,7 +266,7 @@ func (k *EKF) Update(x, u, z mat.Vector) (filter.Estimate, error) {
 		}
 	}
 
-	yawNorm := k.normalizeAngle(x.AtVec(nx - 2))
+	yawNorm := normalizeAngle(x.AtVec(nx - 2))
 	x.(*mat.VecDense).SetVec(nx-2, yawNorm)
 
 	return estimate.NewBaseWithCov(x, k.p)
@@ -289,9 +289,9 @@ func (k *EKF) Run(x, u, z mat.Vector) (filter.Estimate, error) {
 	return est, nil
 }
 
-// UpdateZUPT corrects state x using the measurement z, given control intput u and returns corrected estimate.
+// UpdateManual corrects state x using the measurement z, given control intput u and returns corrected estimate.
 // It returns error if either invalid state was supplied or if it fails to calculate system output estimate.
-func (k *EKF) UpdateZUPT(x, u, z mat.Vector, H_zupt, R_zupt mat.Matrix) (filter.Estimate, error) {
+func (k *EKF) UpdateManual(x, z mat.Vector, H, R mat.Matrix, zuptActive bool) (filter.Estimate, error) {
 	nx, _, _, _ := k.m.SystemDims()
 	ny := 2
 
@@ -299,28 +299,22 @@ func (k *EKF) UpdateZUPT(x, u, z mat.Vector, H_zupt, R_zupt mat.Matrix) (filter.
 		return nil, fmt.Errorf("invalid ZUPT measurement dimension: expected %d, got %d", ny, z.Len())
 	}
 
-	// Obtain the expected measurement (speed from state)
-	y := mat.NewVecDense(ny, nil)
-
-	// Extracting velocities from the state
-	vx := x.AtVec(2)
-	vy := x.AtVec(3)
-	y.SetVec(0, vx)
-	y.SetVec(1, vy)
+	// Obtain the expected measurement
+	y := obtainExpectedMeas(ny, x, zuptActive)
 
 	// Calculate the covariance of innovation
 	pxy := mat.NewDense(nx, ny, nil)
 	pyy := mat.NewDense(ny, ny, nil)
 
 	// P*H'
-	pxy.Mul(k.pNext, H_zupt.T())
+	pxy.Mul(k.pNext, H.T())
 
 	// Note: pxy = P * H' so we reuse the result here
 	// H*P*H'
-	pyy.Mul(H_zupt, pxy)
+	pyy.Mul(H, pxy)
 
 	// Adding ZUPT measurement noise
-	pyy.Add(pyy, R_zupt)
+	pyy.Add(pyy, R)
 
 	// Calculate Kalman gain
 	pyyInv := &mat.Dense{}
@@ -350,14 +344,14 @@ func (k *EKF) UpdateZUPT(x, u, z mat.Vector, H_zupt, R_zupt mat.Matrix) (filter.
 	}
 	a := &mat.Dense{}
 	// K*H
-	a.Mul(gain, H_zupt)
+	a.Mul(gain, H)
 	// eye - K*H
 	a.Sub(eye, a)
 
-	// K * R_zupt * K^T
+	// K * R * K^T
 	kr := &mat.Dense{}
 	pkrk := &mat.Dense{}
-	kr.Mul(gain, R_zupt)
+	kr.Mul(gain, R)
 	pkrk.Mul(kr, gain.T())
 
 	ap := &mat.Dense{}
@@ -380,22 +374,22 @@ func (k *EKF) UpdateZUPT(x, u, z mat.Vector, H_zupt, R_zupt mat.Matrix) (filter.
 		}
 	}
 
-	yawNorm := k.normalizeAngle(x.AtVec(nx - 2))
+	yawNorm := normalizeAngle(x.AtVec(nx - 2))
 	x.(*mat.VecDense).SetVec(nx-2, yawNorm)
 
 	return estimate.NewBaseWithCov(x, k.p)
 }
 
-// RunZUPT runs one step of EKF for given state x, input u and measurement z.
+// RunManual runs one step of EKF for given state x, input u and measurement z.
 // It corrects system state x using measurement z and returns new system estimate.
 // It returns error if it either fails to propagate or correct state x.
-func (k *EKF) RunZUPT(x, u, z mat.Vector, H_zupt, R_zupt mat.Matrix) (filter.Estimate, error) {
+func (k *EKF) RunManual(x, u, z mat.Vector, H, R mat.Matrix, zuptActive bool) (filter.Estimate, error) {
 	pred, err := k.Predict(x, u)
 	if err != nil {
 		return nil, err
 	}
 
-	est, err := k.UpdateZUPT(pred.Val(), u, z, H_zupt, R_zupt)
+	est, err := k.UpdateManual(pred.Val(), z, H, R, zuptActive)
 	if err != nil {
 		return nil, err
 	}
@@ -485,7 +479,7 @@ func (k *EKF) SetOutputNoise(r filter.Noise) error {
 }
 
 // calcDeltaYaw calculates the difference in yaw angle based on its limitations
-func (k *EKF) calcDeltaYaw(heading, lastHeading float64) float64 {
+func calcDeltaYaw(heading, lastHeading float64) float64 {
 	delta := heading - lastHeading
 	delta = math.Mod(delta, 2*math.Pi)
 
@@ -499,7 +493,7 @@ func (k *EKF) calcDeltaYaw(heading, lastHeading float64) float64 {
 }
 
 // normalizeAngle brings an angle to the range [-π, π]
-func (k *EKF) normalizeAngle(angle float64) float64 {
+func normalizeAngle(angle float64) float64 {
 	angle = math.Mod(angle, 2*math.Pi)
 	if angle > math.Pi {
 		angle -= 2 * math.Pi
@@ -507,4 +501,26 @@ func (k *EKF) normalizeAngle(angle float64) float64 {
 		angle += 2 * math.Pi
 	}
 	return angle
+}
+
+// Obtain the expected measurement depending on zuptActive
+func obtainExpectedMeas(ny int, x mat.Vector, zuptActive bool) *mat.VecDense {
+
+	y := mat.NewVecDense(ny, nil)
+
+	if zuptActive {
+		// Extracting velocities from the state
+		vE := x.AtVec(2)
+		vN := x.AtVec(3)
+		y.SetVec(0, vE)
+		y.SetVec(1, vN)
+	} else {
+		// Extracting positions from the state
+		posE := x.AtVec(0)
+		posN := x.AtVec(1)
+		y.SetVec(0, posE)
+		y.SetVec(1, posN)
+	}
+
+	return y
 }
