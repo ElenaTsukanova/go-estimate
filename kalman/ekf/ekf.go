@@ -219,7 +219,7 @@ func (k *EKF) Update(x, u, z mat.Vector) (filter.Estimate, error) {
 	inn := &mat.VecDense{}
 	inn.SubVec(z, y)
 
-	inn.SetVec(ny-1, calcDeltaYaw(z.AtVec(ny-1), y.AtVec(ny-1)))
+	updateYawInn(inn, calcDeltaYaw(gnssYaw(z), gnssYaw(y)))
 
 	// update state x
 	corr := &mat.Dense{}
@@ -266,8 +266,8 @@ func (k *EKF) Update(x, u, z mat.Vector) (filter.Estimate, error) {
 		}
 	}
 
-	yawNorm := normalizeAngle(x.AtVec(nx - 2))
-	x.(*mat.VecDense).SetVec(nx-2, yawNorm)
+	yawNorm := normalizeAngle(yaw(x))
+	updateYaw(&x, yawNorm)
 
 	return estimate.NewBaseWithCov(x, k.p)
 }
@@ -374,8 +374,8 @@ func (k *EKF) UpdateManual(x, z mat.Vector, H, R mat.Matrix, zuptActive bool) (f
 		}
 	}
 
-	yawNorm := normalizeAngle(x.AtVec(nx - 2))
-	x.(*mat.VecDense).SetVec(nx-2, yawNorm)
+	yawNorm := normalizeAngle(yaw(x))
+	updateYaw(&x, yawNorm)
 
 	return estimate.NewBaseWithCov(x, k.p)
 }
@@ -510,17 +510,44 @@ func obtainExpectedMeas(ny int, x mat.Vector, zuptActive bool) *mat.VecDense {
 
 	if zuptActive {
 		// Extracting velocities from the state
-		vE := x.AtVec(2)
-		vN := x.AtVec(3)
-		y.SetVec(0, vE)
-		y.SetVec(1, vN)
+		y.SetVec(0, velE(x))
+		y.SetVec(1, velN(x))
 	} else {
-		// Extracting positions from the state
-		posE := x.AtVec(0)
-		posN := x.AtVec(1)
-		y.SetVec(0, posE)
-		y.SetVec(1, posN)
+		// Extracting pos from the state
+		y.SetVec(0, posE(x))
+		y.SetVec(1, posN(x))
 	}
 
 	return y
+}
+
+// Getters
+func posE(v mat.Vector) float64 {
+	return v.AtVec(0)
+}
+func posN(v mat.Vector) float64 {
+	return v.AtVec(1)
+}
+func velE(v mat.Vector) float64 {
+	return v.AtVec(2)
+}
+func velN(v mat.Vector) float64 {
+	return v.AtVec(3)
+}
+func yaw(v mat.Vector) float64 {
+	return v.AtVec(4)
+}
+
+func gnssYaw(v mat.Vector) float64 {
+	return v.AtVec(3)
+}
+
+// update yaw in state
+func updateYaw(x *mat.Vector, newYaw float64) {
+	(*x).(*mat.VecDense).SetVec(4, newYaw)
+}
+
+// update yaw in innovation
+func updateYawInn(x *mat.VecDense, newYawInn float64) {
+	x.SetVec(3, newYawInn)
 }
