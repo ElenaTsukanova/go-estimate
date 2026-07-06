@@ -291,16 +291,16 @@ func (k *EKF) Run(x, u, z mat.Vector) (filter.Estimate, error) {
 
 // UpdateManual corrects state x using the measurement z, given control intput u and returns corrected estimate.
 // It returns error if either invalid state was supplied or if it fails to calculate system output estimate.
-func (k *EKF) UpdateManual(x, z mat.Vector, H, R mat.Matrix, zuptActive bool) (filter.Estimate, error) {
+func (k *EKF) UpdateManual(x, z mat.Vector, H, R mat.Matrix, vCanActive, yrCanActive, zuptActive bool) (filter.Estimate, error) {
 	nx, _, _, _ := k.m.SystemDims()
-	ny := 2
+	ny := z.Len()
 
 	if z.Len() != ny {
 		return nil, fmt.Errorf("invalid ZUPT measurement dimension: expected %d, got %d", ny, z.Len())
 	}
 
 	// Obtain the expected measurement
-	y := obtainExpectedMeas(ny, x, zuptActive)
+	y := obtainExpectedMeas(ny, x, vCanActive, yrCanActive, zuptActive)
 
 	// Calculate the covariance of innovation
 	pxy := mat.NewDense(nx, ny, nil)
@@ -383,13 +383,13 @@ func (k *EKF) UpdateManual(x, z mat.Vector, H, R mat.Matrix, zuptActive bool) (f
 // RunManual runs one step of EKF for given state x, input u and measurement z.
 // It corrects system state x using measurement z and returns new system estimate.
 // It returns error if it either fails to propagate or correct state x.
-func (k *EKF) RunManual(x, u, z mat.Vector, H, R mat.Matrix, zuptActive bool) (filter.Estimate, error) {
+func (k *EKF) RunManual(x, u, z mat.Vector, H, R mat.Matrix, vCanActive, yrCanActive, zuptActive bool) (filter.Estimate, error) {
 	pred, err := k.Predict(x, u)
 	if err != nil {
 		return nil, err
 	}
 
-	est, err := k.UpdateManual(pred.Val(), z, H, R, zuptActive)
+	est, err := k.UpdateManual(pred.Val(), z, H, R, vCanActive, yrCanActive, zuptActive)
 	if err != nil {
 		return nil, err
 	}
@@ -503,19 +503,25 @@ func normalizeAngle(angle float64) float64 {
 	return angle
 }
 
-// Obtain the expected measurement depending on zuptActive
-func obtainExpectedMeas(ny int, x mat.Vector, zuptActive bool) *mat.VecDense {
+// Obtain the expected measurement depending on zupt and Can activation
+func obtainExpectedMeas(ny int, x mat.Vector, vCanActive, yrCanActive, zuptActive bool) *mat.VecDense {
 
 	y := mat.NewVecDense(ny, nil)
 
-	if zuptActive {
-		// Extracting velocities from the state
-		y.SetVec(0, velE(x))
-		y.SetVec(1, velN(x))
+	if vCanActive {
+		y.SetVec(0, math.Hypot(velE(x), velN(x)))
+	} else if yrCanActive {
+		y.SetVec(0, yawRate(x))
 	} else {
-		// Extracting pos from the state
-		y.SetVec(0, posE(x))
-		y.SetVec(1, posN(x))
+		if zuptActive {
+			// Extracting velocities from the state
+			y.SetVec(0, velE(x))
+			y.SetVec(1, velN(x))
+		} else {
+			// Extracting pos from the state
+			y.SetVec(0, posE(x))
+			y.SetVec(1, posN(x))
+		}
 	}
 
 	return y
@@ -536,6 +542,9 @@ func velN(v mat.Vector) float64 {
 }
 func yaw(v mat.Vector) float64 {
 	return v.AtVec(4)
+}
+func yawRate(v mat.Vector) float64 {
+	return v.AtVec(5)
 }
 
 func gnssYaw(v mat.Vector) float64 {
